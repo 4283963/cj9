@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: retroshooter-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - retroshooter-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: retroshooter-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: retroshooter
+      POSTGRES_PASSWORD: retroshooter
+      POSTGRES_DB: retroshooter
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U retroshooter"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - retroshooter-network
+
+  game-server:
+    build:
+      context: ./game-server
+      dockerfile: Dockerfile
+    container_name: retroshooter-game-server
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - SPRING_DATA_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - retroshooter-network
+    restart: unless-stopped
+
+  archive-service:
+    build:
+      context: ./archive-service
+      dockerfile: Dockerfile
+    container_name: retroshooter-archive-service
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=retroshooter
+      - POSTGRES_PASSWORD=retroshooter
+      - POSTGRES_DB=retroshooter
+      - ARCHIVE_CRON=0 0 1 * * *
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - retroshooter-network
+    restart: unless-stopped
+
+  web-server:
+    image: nginx:alpine
+    container_name: retroshooter-web
+    ports:
+      - "80:80"
+    volumes:
+      - ./game-client/public:/usr/share/nginx/html
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - game-server
+    networks:
+      - retroshooter-network
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  retroshooter-network:
+    driver: bridge

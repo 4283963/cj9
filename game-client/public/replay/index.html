@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>游戏回放 - 复古弹幕射击</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <div class="leaderboard-container">
+        <a href="/leaderboard/" class="back-btn">← 返回排行榜</a>
+        <h1 class="leaderboard-title">🎮 游戏回放 🎮</h1>
+        
+        <div id="replay-info" class="screen" style="margin-bottom: 20px;">
+            <p id="info-text" class="loading">正在加载回放数据...</p>
+        </div>
+        
+        <canvas id="replayCanvas" width="800" height="600" class="hidden"></canvas>
+        
+        <div id="replay-controls" class="replay-controls hidden">
+            <button id="playPauseBtn" class="btn-primary">⏸ 暂停</button>
+            <button id="restartBtn" class="btn-secondary">↻ 重新播放</button>
+            <button id="speedBtn" class="btn-secondary">1x 速度</button>
+        </div>
+        
+        <div id="progress-container" class="hidden">
+            <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill" style="width: 0%;"></div>
+            </div>
+            <p style="text-align: center; color: #888; font-size: 14px;">
+                帧: <span id="frame-counter">0</span> / <span id="total-frames">0</span>
+            </p>
+        </div>
+    </div>
+
+    <script src="/serializer.js"></script>
+    <script src="/game.js"></script>
+    <script>
+        const API_BASE = 'http://localhost:8080/api';
+        const urlParams = new URLSearchParams(window.location.search);
+        const gameId = urlParams.get('id');
+
+        class ReplayPlayer {
+            constructor(canvas, replayData) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.replayData = replayData;
+                this.isPlaying = false;
+                this.speed = 1;
+                this.currentFrame = 0;
+                this.inputIndex = 0;
+                this.currentInput = 0;
+                this.animationId = null;
+                this.lastTime = 0;
+                this.frameAccumulator = 0;
+                this.frameInterval = 1000 / 60;
+                
+                this.gameState = this.createInitialState();
+                this.setupInfo();
+            }
+            
+            createInitialState() {
+                const CONFIG = {
+                    CANVAS_WIDTH: 800,
+                    CANVAS_HEIGHT: 600,
+                    PLAYER_SPEED: 5,
+                    BULLET_SPEED: 10,
+                    ENEMY_BULLET_SPEED: 4,
+                    SPAWN_RATE: 60,
+                    STAGE_BOSS_SCORE: 5000,
+                    MAX_STAGE: 5
+                };
+                
+                return {
+                    CONFIG,
+                    KEY_BITMASK: {
+                        UP: 1 << 0,
+                        DOWN: 1 << 1,
+                        LEFT: 1 << 2,
+                        RIGHT: 1 << 3,
+                        FIRE: 1 << 4
+                    },
+                    score: 0,
+                    lives: 3,
+                    stage: 1,
+                    enemiesKilled: 0,
+                    frameCount: 0,
+                    player: {
+                        x: CONFIG.CANVAS_WIDTH / 4,
+                        y: CONFIG.CANVAS_HEIGHT / 2,
+                        alive: true,
+                        power: 1,
+                        lastFire: 0,
+                        fireRate: 120,
+                        invincibleTimer: 1
+                    },
+                    bullets: [],
+                    enemyBullets: [],
+                    enemies: [],
+                    explosions: [],
+                    powerUps: [],
+                    stars: [],
+                    spawnTimer: 0,
+                    bossActive: false,
+                    boss: null,
+                    startTime: this.replayData.startTime
+                };
+            }
+            
+            setupInfo() {
+                const info = document.getElementById('info-text');
+                info.innerHTML = `
+                    <strong style="color: #ffcc00;">玩家:</strong> ${escapeHtml(this.replayData.playerId)} |
+                    <strong style="color: #00ff00;">得分:</strong> ${this.replayData.score.toLocaleString()} |
+                    <strong style="color: #00ffff;">关卡:</strong> ${this.replayData.stage} |
+                    <strong style="color: #ff6600;">击杀:</strong> ${this.replayData.enemiesKilled} |
+                    <strong style="color: #ff00ff;">时间:</strong> ${this.replayData.gameTime.toFixed(1)}s
+                `;
+            }
+            
+            initStars() {
+                for (let i = 0; i < 100; i++) {
+                    this.gameState.stars.push({
+                        x: Math.random() * 800,
+                        y: Math.random() * 600,
+                        speed: Math.random() * 2 + 0.5,
+                        size: Math.random() * 2 + 0.5
+                    });
+                }
+            }
+            
+            start() {
+                this.initStars();
+                this.isPlaying = true;
+                document.getElementById('playPauseBtn').textContent = '⏸ 暂停';
+                this.lastTime = performance.now();
+                this.loop();
+            }
+            
+            pause() {
+                this.isPlaying = false;
+                document.getElementById('playPauseBtn').textContent = '▶ 播放';
+                if (this.animationId) {
+                    cancelAnimationFrame(this.animationId);
+                }
+            }
+            
+            toggle() {
+                if (this.isPlaying) {
+                    this.pause();
+                } else {
+                    this.start();
+                }
+            }
+            
+            restart() {
+                this.currentFrame = 0;
+                this.inputIndex = 0;
+                this.currentInput = 0;
+                this.frameAccumulator = 0;
+                this.gameState = this.createInitialState();
+                this.initStars();
+                this.updateProgress();
+                if (!this.isPlaying) {
+                    this.start();
+                }
+            }
+            
+            setSpeed(speed) {
+                this.speed = speed;
+                document.getElementById('speedBtn').textContent = `${speed}x 速度`;
+            }
+            
+            loop() {
+                if (!this.isPlaying) return;
+                
+                const now = performance.now();
+                const delta = (now - this.lastTime) * this.speed;
+                this.lastTime = now;
+                
+                this.frameAccumulator += delta;
+                
+                while (this.frameAccumulator >= this.frameInterval && 
+                       this.currentFrame < this.replayData.frameCount) {
+                    this.updateFrame();
+                    this.frameAccumulator -= this.frameInterval;
+                }
+                
+                this.render();
+                this.updateProgress();
+                
+                if (this.currentFrame < this.replayData.frameCount) {
+                    this.animationId = requestAnimationFrame(() => this.loop());
+                } else {
+                    this.isPlaying = false;
+                    document.getElementById('playPauseBtn').textContent = '↻ 重新播放';
+                }
+            }
+            
+            updateFrame() {
+                const state = this.gameState;
+                const config = state.CONFIG;
+                const keys = state.KEY_BITMASK;
+                
+                while (this.inputIndex < this.replayData.inputSequence.length &&
+                       this.replayData.inputSequence[this.inputIndex].frame <= this.currentFrame) {
+                    this.currentInput = this.replayData.inputSequence[this.inputIndex].input;
+                    this.inputIndex++;
+                }
+                
+                state.frameCount++;
+                this.currentFrame++;
+                
+                for (let star of state.stars) {
+                    star.x -= star.speed;
+                    if (star.x < 0) {
+                        star.x = config.CANVAS_WIDTH;
+                        star.y = Math.random() * config.CANVAS_HEIGHT;
+                    }
+                }
+                
+                if (state.player.alive) {
+                    let dx = 0, dy = 0;
+                    if (this.currentInput & keys.UP) dy -= config.PLAYER_SPEED;
+                    if (this.currentInput & keys.DOWN) dy += config.PLAYER_SPEED;
+                    if (this.currentInput & keys.LEFT) dx -= config.PLAYER_SPEED;
+                    if (this.currentInput & keys.RIGHT) dx += config.PLAYER_SPEED;
+                    
+                    state.player.x += dx;
+                    state.player.y += dy;
+                    state.player.x = Math.max(20, Math.min(config.CANVAS_WIDTH - 20, state.player.x));
+                    state.player.y = Math.max(20, Math.min(config.CANVAS_HEIGHT - 20, state.player.y));
+                    
+                    if (this.currentInput & keys.FIRE) {
+                        this.playerFire();
+                    }
+                    
+                    state.player.invincibleTimer = Math.max(0, state.player.invincibleTimer - this.frameInterval / 1000);
+                }
+                
+                state.bullets = state.bullets.filter(bullet => {
+                    bullet.x += bullet.vx;
+                    bullet.y += bullet.vy;
+                    return bullet.x > 0 && bullet.x < config.CANVAS_WIDTH &&
+                           bullet.y > 0 && bullet.y < config.CANVAS_HEIGHT;
+                });
+                
+                state.enemyBullets = state.enemyBullets.filter(bullet => {
+                    bullet.x += bullet.vx;
+                    bullet.y += bullet.vy;
+                    return bullet.x > -10 && bullet.x < config.CANVAS_WIDTH + 10 &&
+                           bullet.y > -10 && bullet.y < config.CANVAS_HEIGHT + 10;
+                });
+                
+                for (let enemy of state.enemies) {
+                    this.updateEnemy(enemy);
+                }
+                
+                state.enemies = state.enemies.filter(enemy => {
+                    if (enemy.x < -50 || enemy.health <= 0) {
+                        if (enemy.health <= 0) {
+                            state.score += enemy.score;
+                            state.enemiesKilled++;
+                            state.explosions.push({
+                                x: enemy.x,
+                                y: enemy.y,
+                                size: enemy.isBoss ? 80 : 30,
+                                timer: 1,
+                                maxTimer: 1
+                            });
+                            
+                            if (enemy.isBoss) {
+                                state.bossActive = false;
+                                state.boss = null;
+                                state.stage++;
+                                state.score += 2000 * (state.stage - 1);
+                            }
+                        }
+                        return false;
+                    }
+                    return true;
+                });
+                
+                state.explosions = state.explosions.filter(exp => {
+                    exp.timer -= 0.05;
+                    return exp.timer > 0;
+                });
+                
+                state.powerUps = state.powerUps.filter(p => {
+                    p.x -= 2;
+                    return p.x > -20;
+                });
+                
+                this.spawnEnemies();
+                this.checkCollisions();
+            }
+            
+            playerFire() {
+                const state = this.gameState;
+                if (!state.player.canFire()) return;
+                if (typeof state.player.canFire !== 'function') {
+                    state.player.canFire = function() {
+                        return Date.now() - this.lastFire >= this.fireRate;
+                    };
+                }
+                
+                const bulletSpeed = state.CONFIG.BULLET_SPEED;
+                const power = state.player.power;
+                
+                if (power === 1) {
+                    state.bullets.push({ x: state.player.x + 25, y: state.player.y, vx: bulletSpeed, vy: 0 });
+                } else if (power === 2) {
+                    state.bullets.push({ x: state.player.x + 25, y: state.player.y - 8, vx: bulletSpeed, vy: 0 });
+                    state.bullets.push({ x: state.player.x + 25, y: state.player.y + 8, vx: bulletSpeed, vy: 0 });
+                } else {
+                    state.bullets.push({ x: state.player.x + 25, y: state.player.y, vx: bulletSpeed, vy: 0 });
+                    state.bullets.push({ x: state.player.x + 20, y: state.player.y - 10, vx: bulletSpeed, vy: -1 });
+                    state.bullets.push({ x: state.player.x + 20, y: state.player.y + 10, vx: bulletSpeed, vy: 1 });
+                }
+                
+                state.player.lastFire = Date.now();
+            }
+            
+            createEnemy(x, y, type, stage) {
+                const enemy = {
+                    x, y, type, stage,
+                    fireTimer: Math.random() * 60,
+                    moveTimer: 0,
+                    movePattern: Math.floor(Math.random() * 3)
+                };
+                
+                if (type === 'normal') {
+                    enemy.health = 2 + Math.floor(stage / 2);
+                    enemy.maxHealth = enemy.health;
+                    enemy.speed = 1.5 + stage * 0.1;
+                    enemy.score = 100;
+                    enemy.hitboxRadius = 18;
+                    enemy.fireRate = 90 - stage * 5;
+                    enemy.color = '#ff4444';
+                } else if (type === 'fast') {
+                    enemy.health = 1;
+                    enemy.maxHealth = 1;
+                    enemy.speed = 3 + stage * 0.2;
+                    enemy.score = 150;
+                    enemy.hitboxRadius = 12;
+                    enemy.fireRate = 120;
+                    enemy.color = '#44ff44';
+                } else if (type === 'heavy') {
+                    enemy.health = 6 + stage;
+                    enemy.maxHealth = enemy.health;
+                    enemy.speed = 0.8;
+                    enemy.score = 300;
+                    enemy.hitboxRadius = 25;
+                    enemy.fireRate = 60;
+                    enemy.color = '#ff8800';
+                } else if (type === 'boss') {
+                    enemy.health = 50 + stage * 30;
+                    enemy.maxHealth = enemy.health;
+                    enemy.speed = 1;
+                    enemy.score = 5000;
+                    enemy.hitboxRadius = 60;
+                    enemy.fireRate = 30;
+                    enemy.color = '#ff00ff';
+                    enemy.isBoss = true;
+                    enemy.phase = 0;
+                }
+                
+                return enemy;
+            }
+            
+            updateEnemy(enemy) {
+                const state = this.gameState;
+                enemy.moveTimer++;
+                enemy.fireTimer++;
+                
+                if (enemy.isBoss) {
+                    if (enemy.x > state.CONFIG.CANVAS_WIDTH - 150) {
+                        enemy.x -= 2;
+                        return;
+                    }
+                    enemy.y += Math.sin(enemy.moveTimer / 60) * 1.5;
+                    enemy.y = Math.max(100, Math.min(state.CONFIG.CANVAS_HEIGHT - 100, enemy.y));
+                    
+                    const healthPercent = enemy.health / enemy.maxHealth;
+                    if (healthPercent < 0.3) enemy.phase = 2;
+                    else if (healthPercent < 0.6) enemy.phase = 1;
+                    
+                    if (enemy.fireTimer >= enemy.fireRate - enemy.phase * 5) {
+                        enemy.fireTimer = 0;
+                        this.fireBoss(enemy);
+                    }
+                    return;
+                }
+                
+                enemy.x -= enemy.speed;
+                
+                if (enemy.movePattern === 0) {
+                    enemy.y += Math.sin(enemy.moveTimer / 30) * 1.5;
+                } else if (enemy.movePattern === 1) {
+                    if (enemy.y < state.player.y) enemy.y += 0.8;
+                    else if (enemy.y > state.player.y) enemy.y -= 0.8;
+                } else {
+                    enemy.y += Math.sin(enemy.moveTimer / 20) * 2;
+                }
+                
+                enemy.y = Math.max(30, Math.min(state.CONFIG.CANVAS_HEIGHT - 30, enemy.y));
+                
+                if (enemy.fireTimer >= enemy.fireRate && enemy.x < state.CONFIG.CANVAS_WIDTH - 50) {
+                    enemy.fireTimer = 0;
+                    this.fireEnemy(enemy);
+                }
+            }
+            
+            fireEnemy(enemy) {
+                const state = this.gameState;
+                if (!state.player || !state.player.alive) return;
+                
+                const angle = Math.atan2(state.player.y - enemy.y, state.player.x - enemy.x);
+                const speed = state.CONFIG.ENEMY_BULLET_SPEED;
+                
+                if (enemy.type === 'heavy') {
+                    for (let i = -1; i <= 1; i++) {
+                        const a = angle + i * 0.2;
+                        state.enemyBullets.push({
+                            x: enemy.x - 15, y: enemy.y,
+                            vx: Math.cos(a) * speed, vy: Math.sin(a) * speed,
+                            radius: 6, color: '#ff8800'
+                        });
+                    }
+                } else {
+                    state.enemyBullets.push({
+                        x: enemy.x - 15, y: enemy.y,
+                        vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+                        radius: 5, color: enemy.color
+                    });
+                }
+            }
+            
+            fireBoss(enemy) {
+                const state = this.gameState;
+                if (!state.player || !state.player.alive) return;
+                
+                const baseAngle = Math.atan2(state.player.y - enemy.y, state.player.x - enemy.x);
+                const bulletCount = 8 + enemy.phase * 4;
+                const spread = Math.PI / 3 + enemy.phase * Math.PI / 6;
+                
+                for (let i = 0; i < bulletCount; i++) {
+                    const angle = baseAngle - spread / 2 + (spread / (bulletCount - 1)) * i;
+                    const speed = state.CONFIG.ENEMY_BULLET_SPEED * 0.8;
+                    state.enemyBullets.push({
+                        x: enemy.x - 40, y: enemy.y,
+                        vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+                        radius: 8, color: '#ff00ff'
+                    });
+                }
+                
+                if (enemy.phase >= 1 && enemy.fireTimer % 2 === 0) {
+                    for (let i = 0; i < 12; i++) {
+                        const angle = (i / 12) * Math.PI * 2 + enemy.moveTimer / 50;
+                        state.enemyBullets.push({
+                            x: enemy.x, y: enemy.y,
+                            vx: Math.cos(angle) * 2.5, vy: Math.sin(angle) * 2.5,
+                            radius: 5, color: '#ffff00'
+                        });
+                    }
+                }
+            }
+            
+            spawnEnemies() {
+                const state = this.gameState;
+                const config = state.CONFIG;
+                
+                if (state.bossActive) return;
+                
+                const nextBossScore = state.stage * config.STAGE_BOSS_SCORE;
+                if (state.score >= nextBossScore && !state.bossActive) {
+                    state.bossActive = true;
+                    state.boss = this.createEnemy(
+                        config.CANVAS_WIDTH + 100,
+                        config.CANVAS_HEIGHT / 2,
+                        'boss',
+                        state.stage
+                    );
+                    state.enemies.push(state.boss);
+                    
+                    for (let i = 0; i < 5; i++) {
+                        state.enemies.push(this.createEnemy(
+                            config.CANVAS_WIDTH + 50 + i * 30,
+                            config.CANVAS_HEIGHT / 2 - 80 + i * 40,
+                            'normal',
+                            state.stage
+                        ));
+                    }
+                    return;
+                }
+                
+                state.spawnTimer++;
+                const spawnRate = Math.max(20, config.SPAWN_RATE - state.stage * 8);
+                
+                if (state.spawnTimer >= spawnRate) {
+                    state.spawnTimer = 0;
+                    
+                    const type = Math.random();
+                    const y = Math.random() * (config.CANVAS_HEIGHT - 100) + 50;
+                    const x = config.CANVAS_WIDTH + 30;
+                    
+                    if (type < 0.6) {
+                        state.enemies.push(this.createEnemy(x, y, 'normal', state.stage));
+                    } else if (type < 0.85) {
+                        state.enemies.push(this.createEnemy(x, y, 'fast', state.stage));
+                    } else {
+                        state.enemies.push(this.createEnemy(x, y, 'heavy', state.stage));
+                    }
+                }
+            }
+            
+            checkCollisions() {
+                const state = this.gameState;
+                if (!state.player || !state.player.alive) return;
+                
+                for (let i = state.bullets.length - 1; i >= 0; i--) {
+                    const bullet = state.bullets[i];
+                    for (let j = state.enemies.length - 1; j >= 0; j--) {
+                        const enemy = state.enemies[j];
+                        if (this.checkCircleCollision(bullet, enemy, 6, enemy.hitboxRadius)) {
+                            enemy.health -= 1;
+                            state.bullets.splice(i, 1);
+                            state.explosions.push({
+                                x: bullet.x, y: bullet.y, size: 8,
+                                timer: 1, maxTimer: 1
+                            });
+                            break;
+                        }
+                    }
+                }
+                
+                if (state.player.invincibleTimer <= 0) {
+                    for (let bullet of state.enemyBullets) {
+                        if (this.checkCircleCollision(bullet, state.player, 5, 15)) {
+                            this.playerHit();
+                            state.enemyBullets = state.enemyBullets.filter(b => b !== bullet);
+                            break;
+                        }
+                    }
+                    
+                    for (let enemy of state.enemies) {
+                        if (this.checkCircleCollision(enemy, state.player, enemy.hitboxRadius, 15)) {
+                            this.playerHit();
+                            enemy.health -= 3;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            checkCircleCollision(a, b, r1, r2) {
+                const dx = a.x - b.x;
+                const dy = a.y - b.y;
+                return Math.sqrt(dx * dx + dy * dy) < r1 + r2;
+            }
+            
+            playerHit() {
+                const state = this.gameState;
+                state.lives--;
+                state.player.invincibleTimer = 2;
+                state.player.power = Math.max(1, state.player.power - 1);
+                state.explosions.push({
+                    x: state.player.x, y: state.player.y, size: 40,
+                    timer: 1, maxTimer: 1
+                });
+                
+                if (state.lives <= 0) {
+                    state.player.alive = false;
+                }
+            }
+            
+            updateProgress() {
+                const progress = (this.currentFrame / this.replayData.frameCount) * 100;
+                document.getElementById('progress-fill').style.width = progress + '%';
+                document.getElementById('frame-counter').textContent = this.currentFrame;
+                document.getElementById('total-frames').textContent = this.replayData.frameCount;
+            }
+            
+            render() {
+                const ctx = this.ctx;
+                const state = this.gameState;
+                const config = state.CONFIG;
+                
+                ctx.fillStyle = '#000011';
+                ctx.fillRect(0, 0, config.CANVAS_WIDTH, config.CANVAS_HEIGHT);
+                
+                for (let star of state.stars) {
+                    ctx.fillStyle = `rgba(255, 255, 255, ${0.3 + star.size / 3})`;
+                    ctx.fillRect(star.x, star.y, star.size, star.size);
+                }
+                
+                for (let p of state.powerUps) {
+                    ctx.fillStyle = p.type === 'power' ? '#00ff00' : '#ff00ff';
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                for (let enemy of state.enemies) {
+                    ctx.save();
+                    ctx.translate(enemy.x, enemy.y);
+                    
+                    if (enemy.isBoss) {
+                        const r = enemy.hitboxRadius;
+                        ctx.fillStyle = '#660066';
+                        ctx.beginPath();
+                        ctx.moveTo(-r, 0);
+                        ctx.lineTo(r * 0.5, -r);
+                        ctx.lineTo(r, -r * 0.3);
+                        ctx.lineTo(r, r * 0.3);
+                        ctx.lineTo(r * 0.5, r);
+                        ctx.closePath();
+                        ctx.fill();
+                        
+                        ctx.fillStyle = '#aa00aa';
+                        ctx.beginPath();
+                        ctx.moveTo(-r * 0.7, 0);
+                        ctx.lineTo(r * 0.3, -r * 0.6);
+                        ctx.lineTo(r * 0.5, 0);
+                        ctx.lineTo(r * 0.3, r * 0.6);
+                        ctx.closePath();
+                        ctx.fill();
+                        
+                        ctx.fillStyle = '#ff0000';
+                        ctx.beginPath();
+                        ctx.arc(0, 0, r * 0.25, 0, Math.PI * 2);
+                        ctx.fill();
+                    } else {
+                        const r = enemy.hitboxRadius;
+                        ctx.fillStyle = enemy.color;
+                        ctx.beginPath();
+                        ctx.moveTo(-r, 0);
+                        ctx.lineTo(r * 0.7, -r * 0.7);
+                        ctx.lineTo(r * 0.5, 0);
+                        ctx.lineTo(r * 0.7, r * 0.7);
+                        ctx.closePath();
+                        ctx.fill();
+                        
+                        ctx.fillStyle = '#ffff00';
+                        ctx.beginPath();
+                        ctx.arc(-r * 0.3, 0, r * 0.25, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                    
+                    ctx.restore();
+                }
+                
+                for (let bullet of state.bullets) {
+                    ctx.fillStyle = '#ffff00';
+                    ctx.fillRect(bullet.x - 2, bullet.y - 2, 8, 4);
+                }
+                
+                for (let bullet of state.enemyBullets) {
+                    ctx.fillStyle = bullet.color || '#ff3366';
+                    ctx.beginPath();
+                    ctx.arc(bullet.x, bullet.y, bullet.radius || 5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                if (state.player && state.player.alive) {
+                    const p = state.player;
+                    
+                    if (!(p.invincibleTimer > 0 && Math.floor(p.invincibleTimer * 10) % 2 === 0)) {
+                        ctx.save();
+                        ctx.translate(p.x, p.y);
+                        
+                        ctx.fillStyle = '#4488ff';
+                        ctx.beginPath();
+                        ctx.moveTo(20, 0);
+                        ctx.lineTo(-15, -15);
+                        ctx.lineTo(-10, 0);
+                        ctx.lineTo(-15, 15);
+                        ctx.closePath();
+                        ctx.fill();
+                        
+                        ctx.fillStyle = '#66aaff';
+                        ctx.beginPath();
+                        ctx.moveTo(15, 0);
+                        ctx.lineTo(-5, -8);
+                        ctx.lineTo(-5, 8);
+                        ctx.closePath();
+                        ctx.fill();
+                        
+                        ctx.fillStyle = '#00ffff';
+                        ctx.beginPath();
+                        ctx.arc(0, 0, 4, 0, Math.PI * 2);
+                        ctx.fill();
+                        
+                        ctx.restore();
+                    }
+                }
+                
+                for (let exp of state.explosions) {
+                    const progress = 1 - exp.timer / exp.maxTimer;
+                    const radius = exp.size * (0.5 + progress * 0.5);
+                    const alpha = 1 - progress;
+                    
+                    ctx.save();
+                    ctx.globalAlpha = alpha;
+                    ctx.strokeStyle = '#ffff00';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.arc(exp.x, exp.y, radius, 0, Math.PI * 2);
+                    ctx.stroke();
+                    ctx.fillStyle = '#ff6600';
+                    ctx.beginPath();
+                    ctx.arc(exp.x, exp.y, radius * 0.6, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.restore();
+                }
+                
+                if (state.bossActive && state.boss) {
+                    const barWidth = 600;
+                    const barHeight = 20;
+                    const x = (config.CANVAS_WIDTH - barWidth) / 2;
+                    const y = 10;
+                    
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                    ctx.fillRect(x - 2, y - 2, barWidth + 4, barHeight + 4);
+                    
+                    const healthPercent = state.boss.health / state.boss.maxHealth;
+                    ctx.fillStyle = '#ff0000';
+                    ctx.fillRect(x, y, barWidth * healthPercent, barHeight);
+                    
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x, y, barWidth, barHeight);
+                    
+                    ctx.fillStyle = '#fff';
+                    ctx.font = 'bold 14px Courier New';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(`BOSS - STAGE ${state.stage}`, config.CANVAS_WIDTH / 2, y + 15);
+                }
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function loadReplay() {
+            if (!gameId) {
+                document.getElementById('info-text').innerHTML = 
+                    '<span style="color:#ff6666;">错误：缺少回放ID参数</span>';
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/game/replay/${gameId}`);
+                const result = await response.json();
+                
+                if (result.success && result.data) {
+                    const replayData = result.data;
+                    
+                    document.getElementById('replayCanvas').classList.remove('hidden');
+                    document.getElementById('replay-controls').classList.remove('hidden');
+                    document.getElementById('progress-container').classList.remove('hidden');
+                    
+                    const canvas = document.getElementById('replayCanvas');
+                    const player = new ReplayPlayer(canvas, replayData);
+                    
+                    document.getElementById('playPauseBtn').addEventListener('click', () => {
+                        if (player.currentFrame >= player.replayData.frameCount) {
+                            player.restart();
+                        } else {
+                            player.toggle();
+                        }
+                    });
+                    
+                    document.getElementById('restartBtn').addEventListener('click', () => {
+                        player.restart();
+                    });
+                    
+                    const speeds = [1, 2, 4];
+                    let speedIndex = 0;
+                    document.getElementById('speedBtn').addEventListener('click', () => {
+                        speedIndex = (speedIndex + 1) % speeds.length;
+                        player.setSpeed(speeds[speedIndex]);
+                    });
+                    
+                    player.start();
+                } else {
+                    document.getElementById('info-text').innerHTML = 
+                        `<span style="color:#ff6666;">加载失败: ${result.message || '未知错误'}</span>`;
+                }
+            } catch (error) {
+                console.error('Failed to load replay:', error);
+                document.getElementById('info-text').innerHTML = 
+                    `<span style="color:#ff6666;">网络错误: ${error.message}</span>`;
+            }
+        }
+
+        loadReplay();
+    </script>
+</body>
+</html>

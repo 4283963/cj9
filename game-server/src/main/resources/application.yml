@@ -1,0 +1,47 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: retro-shooter-game-server
+  
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 5000
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+
+game:
+  config:
+    max-score: 1000000
+    max-game-time-seconds: 3600
+    min-input-entries: 100
+    max-input-entries: 100000
+    anti-cheat:
+      max-speed-violations: 5
+      max-impossible-score-deviation: 0.3
+      min-frame-interval: 15
+
+redis:
+  keys:
+    leaderboard-daily: "game:leaderboard:daily"
+    leaderboard-weekly: "game:leaderboard:weekly"
+    leaderboard-all: "game:leaderboard:all"
+    game-detail-prefix: "game:detail:"
+    player-best-prefix: "game:player:best:"
+    replay-data-prefix: "game:replay:"
+
+logging:
+  level:
+    com.retroshooter: DEBUG
+    org.springframework.data.redis: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"

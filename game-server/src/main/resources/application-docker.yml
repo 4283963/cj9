@@ -1,0 +1,21 @@
+server:
+  port: 8080
+
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 3000
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 5
+
+game:
+  anti-cheat:
+    max-score-deviation: 0.30
+    max-game-time-seconds: 3600
+    max-enemies-killed: 10000
+    max-score: 1000000
