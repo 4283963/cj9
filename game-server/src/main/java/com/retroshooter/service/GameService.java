@@ -1,8 +1,11 @@
 package com.retroshooter.service;
 
 import com.retroshooter.dto.GameSubmitResponse;
+import com.retroshooter.dto.RankPromotionEvent;
+import com.retroshooter.dto.SeasonInfo;
 import com.retroshooter.entity.GameRecord;
 import com.retroshooter.entity.LeaderboardEntry;
+import com.retroshooter.entity.Rank;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -17,6 +20,7 @@ public class GameService {
     private final BinarySerializer binarySerializer;
     private final AntiCheatService antiCheatService;
     private final LeaderboardService leaderboardService;
+    private final RankService rankService;
 
     public GameSubmitResponse submitGame(byte[] binaryData) {
         log.debug("Received game submission, size: {} bytes", binaryData.length);
@@ -56,18 +60,25 @@ public class GameService {
         
         record.setVerified(true);
         Long rank = leaderboardService.addScore(record);
-        
-        log.info("Game {} accepted, rank: {}, player: {}, score: {}", 
-                record.getGameId(), rank, record.getPlayerId(), record.getScore());
+
+        RankPromotionEvent promotionEvent = rankService.checkRankPromotion(record.getPlayerId(), record.getScore());
+        Rank currentRank = rankService.calculateRank(Math.max(rankService.getPlayerTotalScore(record.getPlayerId()), record.getScore()));
+
+        log.info("Game {} accepted, rank: {}, player: {}, score: {}, promoted: {}", 
+                record.getGameId(), rank, record.getPlayerId(), record.getScore(), promotionEvent.isPromoted());
         
         return GameSubmitResponse.builder()
                 .success(true)
-                .message("分数提交成功")
+                .message(promotionEvent.isPromoted() ? "恭喜晋级！" : "分数提交成功")
                 .rank(rank)
                 .score(record.getScore())
                 .gameId(record.getGameId())
                 .verified(true)
                 .verificationDetails(verificationDetails)
+                .currentRank(currentRank)
+                .rankProgress(rankService.getRankProgress(record.getScore()))
+                .scoreToNextRank(rankService.getScoreToNextRank(record.getScore()))
+                .promotionEvent(promotionEvent)
                 .build();
     }
 
@@ -81,5 +92,9 @@ public class GameService {
 
     public Optional<LeaderboardEntry> getPlayerBest(String playerId, String period) {
         return leaderboardService.getPlayerBest(playerId, period);
+    }
+
+    public SeasonInfo getSeasonInfo(String playerId) {
+        return rankService.getSeasonInfo(playerId);
     }
 }

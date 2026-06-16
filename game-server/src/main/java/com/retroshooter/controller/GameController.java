@@ -2,6 +2,7 @@ package com.retroshooter.controller;
 
 import com.retroshooter.dto.ApiResponse;
 import com.retroshooter.dto.GameSubmitResponse;
+import com.retroshooter.dto.SeasonInfo;
 import com.retroshooter.entity.GameRecord;
 import com.retroshooter.entity.LeaderboardEntry;
 import com.retroshooter.service.GameService;
@@ -91,6 +92,14 @@ public class GameController {
         } else {
             return ResponseEntity.notFound().build();
         }
+    }
+
+    @GetMapping("/season")
+    public ResponseEntity<ApiResponse<SeasonInfo>> getSeasonInfo(
+            @RequestParam(defaultValue = "Guest") String playerId) {
+        log.debug("Fetching season info for player: {}", playerId);
+        SeasonInfo seasonInfo = gameService.getSeasonInfo(playerId);
+        return ResponseEntity.ok(ApiResponse.success(seasonInfo));
     }
 
     @GetMapping("/health")

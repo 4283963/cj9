@@ -29,6 +29,10 @@ game:
       max-speed-violations: 5
       max-impossible-score-deviation: 0.3
       min-frame-interval: 15
+  season:
+    name: "赛季1 - 起源之战"
+    start-date: "2026-01-01"
+    end-date: "2026-12-31"
 
 redis:
   keys:

@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>赛季中心 - 复古弹幕射击</title>
+    <link rel="stylesheet" href="/styles.css">
+    <style>
+        .season-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .season-header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 30px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-radius: 15px;
+            border: 2px solid #444;
+        }
+        .season-title {
+            font-size: 32px;
+            color: #ffd700;
+            text-shadow: 0 0 20px rgba(255, 215, 0, 0.5);
+            margin-bottom: 10px;
+        }
+        .season-dates {
+            color: #aaa;
+            font-size: 14px;
+        }
+        .season-countdown {
+            margin-top: 15px;
+            font-size: 18px;
+            color: #00ffff;
+        }
+        .player-rank-section {
+            background: linear-gradient(135deg, #1a1a2e 0%, #0f3460 100%);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            border: 2px solid #444;
+        }
+        .rank-display {
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .rank-badge {
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            position: relative;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        .rank-badge::before {
+            content: '';
+            position: absolute;
+            inset: -5px;
+            border-radius: 50%;
+            background: inherit;
+            filter: blur(15px);
+            opacity: 0.5;
+            z-index: -1;
+        }
+        .rank-info {
+            flex: 1;
+            min-width: 250px;
+        }
+        .rank-name {
+            font-size: 36px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .rank-score {
+            font-size: 20px;
+            color: #ddd;
+            margin-bottom: 15px;
+        }
+        .rank-progress-container {
+            background: #333;
+            border-radius: 10px;
+            height: 20px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        .rank-progress-bar {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.5s ease;
+            background: linear-gradient(90deg, #ffd700, #ff8c00);
+        }
+        .rank-next-info {
+            font-size: 14px;
+            color: #aaa;
+        }
+        .rank-position {
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: rgba(255, 215, 0, 0.1);
+            border-radius: 8px;
+            display: inline-block;
+            color: #ffd700;
+            font-size: 16px;
+        }
+        .ranks-overview {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .rank-card {
+            background: #1a1a2e;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            border: 2px solid #333;
+            transition: all 0.3s ease;
+        }
+        .rank-card:hover {
+            transform: translateY(-5px);
+            border-color: #ffd700;
+        }
+        .rank-card.current {
+            border-color: #ffd700;
+            box-shadow: 0 0 20px rgba(255, 215, 0, 0.3);
+        }
+        .rank-card-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            margin: 0 auto 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: bold;
+            color: #fff;
+        }
+        .rank-card-name {
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .rank-card-range {
+            font-size: 12px;
+            color: #888;
+        }
+        .leaderboard-section {
+            background: #1a1a2e;
+            border-radius: 15px;
+            padding: 25px;
+            border: 2px solid #444;
+        }
+        .section-title {
+            font-size: 24px;
+            color: #ffd700;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #333;
+        }
+        .leaderboard-list {
+            list-style: none;
+            padding: 0;
+        }
+        .leaderboard-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            margin-bottom: 8px;
+            background: #0f3460;
+            border-radius: 8px;
+            transition: background 0.2s ease;
+        }
+        .leaderboard-item:hover {
+            background: #162447;
+        }
+        .leaderboard-rank {
+            width: 40px;
+            font-size: 20px;
+            font-weight: bold;
+            color: #ffd700;
+        }
+        .leaderboard-rank.top1 { color: #ffd700; }
+        .leaderboard-rank.top2 { color: #c0c0c0; }
+        .leaderboard-rank.top3 { color: #cd7f32; }
+        .leaderboard-player {
+            flex: 1;
+            font-size: 16px;
+        }
+        .leaderboard-score {
+            font-size: 18px;
+            font-weight: bold;
+            color: #00ffff;
+            margin-right: 15px;
+        }
+        .leaderboard-rank-badge {
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            color: #fff;
+        }
+        .nav-links {
+            text-align: center;
+            margin-top: 30px;
+        }
+        .nav-links a {
+            display: inline-block;
+            margin: 0 10px;
+            padding: 12px 25px;
+            background: #0f3460;
+            color: #fff;
+            text-decoration: none;
+            border-radius: 8px;
+            transition: background 0.2s ease;
+        }
+        .nav-links a:hover {
+            background: #162447;
+        }
+        .player-input {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .player-input input {
+            padding: 10px 15px;
+            border: 2px solid #444;
+            border-radius: 8px;
+            background: #0f3460;
+            color: #fff;
+            font-size: 16px;
+            width: 200px;
+        }
+        .player-input button {
+            padding: 10px 20px;
+            margin-left: 10px;
+            background: #ffd700;
+            color: #000;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .player-input button:hover {
+            background: #ffed4e;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #aaa;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body class="game-body">
+    <div class="season-container">
+        <div class="season-header">
+            <h1 class="season-title" id="seasonTitle">🏆 赛季中心</h1>
+            <p class="season-dates" id="seasonDates"></p>
+            <p class="season-countdown" id="seasonCountdown"></p>
+        </div>
+
+        <div class="player-input">
+            <input type="text" id="playerId" placeholder="输入玩家ID" maxlength="20">
+            <button onclick="loadSeasonInfo()">查询</button>
+        </div>
+
+        <div id="seasonContent">
+            <div class="loading">加载中...</div>
+        </div>
+
+        <div class="nav-links">
+            <a href="/game/play/">🎮 开始游戏</a>
+            <a href="/leaderboard/">📊 排行榜</a>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/game';
+
+        function getStoredPlayerId() {
+            return localStorage.getItem('playerId') || 'Guest';
+        }
+
+        async function loadSeasonInfo() {
+            const playerId = document.getElementById('playerId').value.trim() || getStoredPlayerId();
+            if (playerId) {
+                localStorage.setItem('playerId', playerId);
+            }
+
+            document.getElementById('seasonContent').innerHTML = '<div class="loading">加载中...</div>';
+
+            try {
+                const response = await fetch(`${API_BASE}/season?playerId=${encodeURIComponent(playerId)}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    renderSeasonInfo(data.data);
+                } else {
+                    document.getElementById('seasonContent').innerHTML = 
+                        `<div class="loading">加载失败: ${data.message}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('seasonContent').innerHTML = 
+                    `<div class="loading">网络错误: ${error.message}</div>`;
+            }
+        }
+
+        function renderSeasonInfo(info) {
+            document.getElementById('seasonTitle').textContent = `🏆 ${info.seasonName}`;
+            document.getElementById('seasonDates').textContent = 
+                `赛季时间: ${info.startDate} ~ ${info.endDate}`;
+            document.getElementById('seasonCountdown').textContent = 
+                `⏱️ 赛季剩余: ${info.daysRemaining} 天`;
+
+            const rankColors = {
+                1: { bg: 'linear-gradient(135deg, #CD7F32, #8B4513)', name: '青铜' },
+                2: { bg: 'linear-gradient(135deg, #C0C0C0, #808080)', name: '白银' },
+                3: { bg: 'linear-gradient(135deg, #FFD700, #B8860B)', name: '黄金' },
+                4: { bg: 'linear-gradient(135deg, #E5E4E2, #708090)', name: '铂金' },
+                5: { bg: 'linear-gradient(135deg, #00FFFF, #4169E1)', name: '王者' }
+            };
+
+            const playerRank = rankColors[info.playerRank.level] || rankColors[1];
+            const progress = (info.rankProgress * 100).toFixed(1);
+
+            let html = `
+                <div class="player-rank-section">
+                    <div class="rank-display">
+                        <div class="rank-badge" style="background: ${playerRank.bg}">
+                            ${info.playerRank.name}
+                        </div>
+                        <div class="rank-info">
+                            <div class="rank-name" style="background: ${playerRank.bg}; -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                                ${info.playerRank.name}
+                            </div>
+                            <div class="rank-score">当前积分: ${info.playerScore.toLocaleString()}</div>
+                            <div class="rank-progress-container">
+                                <div class="rank-progress-bar" style="width: ${progress}%"></div>
+                            </div>
+                            <div class="rank-next-info">
+                                ${info.scoreToNextRank > 0 
+                                    ? `距离下一段位还需 ${info.scoreToNextRank.toLocaleString()} 分 (${progress}%)`
+                                    : '已达最高段位！'}
+                            </div>
+                            ${info.playerRankPosition > 0 ? `
+                                <div class="rank-position">
+                                    🏅 全服排名: 第 ${info.playerRankPosition} 名
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>
+
+                <h2 class="section-title">📋 段位一览</h2>
+                <div class="ranks-overview">
+            `;
+
+            info.allRanks.forEach(rank => {
+                const isCurrent = rank.level === info.playerRank.level;
+                const rc = rankColors[rank.level];
+                html += `
+                    <div class="rank-card ${isCurrent ? 'current' : ''}">
+                        <div class="rank-card-icon" style="background: ${rc.bg}">
+                            ${rank.level}
+                        </div>
+                        <div class="rank-card-name" style="color: ${rank.primaryColor}">
+                            ${rank.name}
+                        </div>
+                        <div class="rank-card-range">
+                            ${rank.minScore.toLocaleString()} - ${rank.maxScore === 2147483647 ? '∞' : rank.maxScore.toLocaleString()}
+                        </div>
+                        ${isCurrent ? '<div style="color: #ffd700; font-size: 12px; margin-top: 5px;">⭐ 当前段位</div>' : ''}
+                    </div>
+                `;
+            });
+
+            html += `</div><h2 class="section-title">🏆 全服TOP ${info.topPlayers.length}</h2>
+                <div class="leaderboard-section" style="margin-bottom: 25px;">
+                    <ul class="leaderboard-list">`;
+
+            info.topPlayers.forEach((player, index) => {
+                const pr = rankColors[player.playerRank.level];
+                const topClass = index < 3 ? `top${index + 1}` : '';
+                html += `
+                    <li class="leaderboard-item">
+                        <span class="leaderboard-rank ${topClass}">
+                            ${index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${player.rank}`}
+                        </span>
+                        <span class="leaderboard-player">${player.playerId}</span>
+                        <span class="leaderboard-score">${player.score.toLocaleString()}</span>
+                        <span class="leaderboard-rank-badge" style="background: ${pr.bg}">
+                            ${player.playerRank.name}
+                        </span>
+                    </li>
+                `;
+            });
+
+            html += '</ul></div>';
+
+            document.getElementById('seasonContent').innerHTML = html;
+        }
+
+        document.getElementById('playerId').value = getStoredPlayerId();
+        document.getElementById('playerId').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                loadSeasonInfo();
+            }
+        });
+
+        loadSeasonInfo();
+    </script>
+</body>
+</html>

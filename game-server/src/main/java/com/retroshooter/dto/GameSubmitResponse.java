@@ -1,5 +1,6 @@
 package com.retroshooter.dto;
 
+import com.retroshooter.entity.Rank;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -17,4 +18,8 @@ public class GameSubmitResponse {
     private String gameId;
     private boolean verified;
     private String verificationDetails;
+    private Rank currentRank;
+    private double rankProgress;
+    private int scoreToNextRank;
+    private RankPromotionEvent promotionEvent;
 }

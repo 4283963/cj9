@@ -54,6 +54,8 @@ class Game {
         this.spawnTimer = 0;
         this.bossActive = false;
         this.boss = null;
+
+        this.promotionEffect = null;
         
         this.keys = {};
         this.initStars();
@@ -169,21 +171,28 @@ class Game {
     }
     
     gameLoop(currentTime) {
-        if (this.state === 'gameover') return;
-        
         const deltaTime = (currentTime - this.lastTime) / 1000;
         this.lastTime = currentTime;
-        
+
         if (this.state === 'playing') {
             this.update(deltaTime);
             this.recordInput();
             this.frameCount++;
         }
-        
+
+        if (this.promotionEffect) {
+            this.promotionEffect.update(deltaTime);
+            if (this.promotionEffect.isFinished) {
+                this.promotionEffect = null;
+            }
+        }
+
         this.render();
         this.updateFPS(currentTime);
-        
-        requestAnimationFrame((t) => this.gameLoop(t));
+
+        if (this.state !== 'gameover' || this.promotionEffect) {
+            requestAnimationFrame((t) => this.gameLoop(t));
+        }
     }
     
     updateFPS(currentTime) {
@@ -462,12 +471,12 @@ class Game {
     
     render() {
         const ctx = this.ctx;
-        
+
         ctx.fillStyle = '#000011';
         ctx.fillRect(0, 0, CONFIG.CANVAS_WIDTH, CONFIG.CANVAS_HEIGHT);
-        
+
         this.renderStars();
-        
+
         if (this.state === 'playing' || this.state === 'paused') {
             this.renderPowerUps();
             this.renderEnemies();
@@ -475,10 +484,14 @@ class Game {
             this.renderEnemyBullets();
             this.renderPlayer();
             this.renderExplosions();
-            
+
             if (this.bossActive && this.boss) {
                 this.renderBossHealthBar();
             }
+        }
+
+        if (this.promotionEffect) {
+            this.promotionEffect.render(ctx);
         }
     }
     
@@ -670,7 +683,7 @@ class Game {
         const statusEl = document.getElementById('upload-status');
         statusEl.textContent = '正在上传...';
         statusEl.className = 'upload-status';
-        
+
         try {
             const binaryData = InputSerializer.serialize({
                 gameId: this.gameId,
@@ -683,22 +696,35 @@ class Game {
                 inputSequence: this.inputSequence,
                 frameCount: this.frameCount
             });
-            
+
             console.log(`Serialized data size: ${binaryData.byteLength} bytes`);
-            
-            const response = await fetch('http://localhost:8080/api/game/submit', {
+
+            const apiBase = window.location.origin.includes('localhost') && window.location.port !== '80'
+                ? 'http://localhost:8080'
+                : '';
+            const response = await fetch(`${apiBase}/api/game/submit`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/octet-stream'
                 },
                 body: binaryData
             });
-            
+
             const result = await response.json();
-            
+
             if (result.success) {
-                statusEl.textContent = `✓ 上传成功！当前排名: #${result.rank}`;
+                const data = result.data;
+                let message = `✓ 上传成功！排名: #${data.rank || 'N/A'}`;
+                if (data.currentRank) {
+                    message += ` | 段位: ${data.currentRank.name}`;
+                }
+                statusEl.textContent = message;
                 statusEl.className = 'upload-status success';
+
+                if (data.promotionEvent && data.promotionEvent.promoted) {
+                    statusEl.textContent = `🎉 恭喜晋级 ${data.promotionEvent.newRank.name}！`;
+                    this.startPromotionEffect(data.promotionEvent);
+                }
             } else {
                 statusEl.textContent = `✗ 上传失败: ${result.message}`;
                 statusEl.className = 'upload-status error';
@@ -707,6 +733,18 @@ class Game {
             console.error('Upload error:', error);
             statusEl.textContent = `✗ 网络错误: ${error.message}`;
             statusEl.className = 'upload-status error';
+        }
+    }
+
+    startPromotionEffect(event) {
+        this.promotionEffect = new RankPromotionEffect(
+            CONFIG.CANVAS_WIDTH / 2,
+            CONFIG.CANVAS_HEIGHT / 2,
+            event
+        );
+        if (this.state === 'gameover') {
+            this.lastTime = performance.now();
+            requestAnimationFrame((t) => this.gameLoop(t));
         }
     }
 }
@@ -1001,6 +1039,307 @@ class PowerUp {
         this.x = x;
         this.y = y;
         this.type = Math.random() < 0.7 ? 'power' : 'life';
+    }
+}
+
+class PromotionParticle {
+    constructor(x, y, color, type) {
+        this.x = x;
+        this.y = y;
+        this.color = color;
+        this.type = type;
+        this.life = 1;
+        this.maxLife = 1;
+
+        if (type === 'burst') {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 100 + Math.random() * 300;
+            this.vx = Math.cos(angle) * speed;
+            this.vy = Math.sin(angle) * speed;
+            this.size = 2 + Math.random() * 4;
+            this.decay = 0.8 + Math.random() * 0.4;
+        } else if (type === 'sparkle') {
+            this.vx = (Math.random() - 0.5) * 50;
+            this.vy = -50 - Math.random() * 100;
+            this.size = 1 + Math.random() * 3;
+            this.decay = 0.6 + Math.random() * 0.3;
+        } else if (type === 'ring') {
+            this.radius = 10;
+            this.maxRadius = 150 + Math.random() * 100;
+            this.vx = 0;
+            this.vy = 0;
+            this.size = 2;
+            this.decay = 1.5;
+        } else if (type === 'golden') {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 50 + Math.random() * 150;
+            this.vx = Math.cos(angle) * speed;
+            this.vy = Math.sin(angle) * speed - 100;
+            this.size = 3 + Math.random() * 5;
+            this.decay = 0.5 + Math.random() * 0.3;
+            this.rotation = Math.random() * Math.PI * 2;
+            this.rotationSpeed = (Math.random() - 0.5) * 10;
+        } else {
+            this.vx = (Math.random() - 0.5) * 100;
+            this.vy = (Math.random() - 0.5) * 100;
+            this.size = 3;
+            this.decay = 1;
+        }
+    }
+
+    update(dt) {
+        this.life -= this.decay * dt;
+        this.x += this.vx * dt;
+        this.y += this.vy * dt;
+        this.vy += 100 * dt;
+        if (this.rotationSpeed) {
+            this.rotation += this.rotationSpeed * dt;
+        }
+        if (this.type === 'ring') {
+            this.radius += (this.maxRadius - this.radius) * 3 * dt;
+        }
+    }
+
+    render(ctx) {
+        const alpha = Math.max(0, this.life / this.maxLife);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+
+        if (this.type === 'ring') {
+            ctx.strokeStyle = this.color;
+            ctx.lineWidth = this.size * alpha;
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 20;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.stroke();
+        } else if (this.type === 'golden') {
+            ctx.translate(this.x, this.y);
+            ctx.rotate(this.rotation);
+            ctx.fillStyle = this.color;
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 15;
+            this.drawStar(ctx, 0, 0, 5, this.size, this.size / 2);
+        } else {
+            ctx.fillStyle = this.color;
+            ctx.shadowColor = this.color;
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size * alpha, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+    }
+
+    drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius) {
+        let rot = Math.PI / 2 * 3;
+        let x = cx;
+        let y = cy;
+        const step = Math.PI / spikes;
+
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - outerRadius);
+        for (let i = 0; i < spikes; i++) {
+            x = cx + Math.cos(rot) * outerRadius;
+            y = cy + Math.sin(rot) * outerRadius;
+            ctx.lineTo(x, y);
+            rot += step;
+
+            x = cx + Math.cos(rot) * innerRadius;
+            y = cy + Math.sin(rot) * innerRadius;
+            ctx.lineTo(x, y);
+            rot += step;
+        }
+        ctx.lineTo(cx, cy - outerRadius);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    isDead() {
+        return this.life <= 0;
+    }
+}
+
+class RankPromotionEffect {
+    constructor(x, y, event) {
+        this.x = x;
+        this.y = y;
+        this.event = event;
+        this.particles = [];
+        this.time = 0;
+        this.duration = (event.durationMs || 3500) / 1000;
+        this.isFinished = false;
+        this.primaryColor = event.primaryColor || '#FFD700';
+        this.secondaryColor = event.secondaryColor || '#B8860B';
+        this.textAlpha = 0;
+        this.spawnTimer = 0;
+        this.textScale = 0;
+        this.shakeIntensity = 0;
+        this.prevRank = event.previousRank;
+        this.newRank = event.newRank;
+        this.scoreGained = event.scoreGained || 0;
+    }
+
+    update(dt) {
+        this.time += dt;
+        this.spawnTimer += dt;
+
+        const progress = this.time / this.duration;
+
+        if (progress < 0.15) {
+            this.textAlpha = progress / 0.15;
+            this.textScale = progress / 0.15;
+            this.shakeIntensity = (1 - progress / 0.15) * 10;
+            if (this.spawnTimer > 0.01) {
+                this.spawnTimer = 0;
+                this.spawnBurstParticles(15);
+            }
+        } else if (progress < 0.85) {
+            this.textAlpha = 1;
+            this.textScale = 1 + Math.sin(this.time * 8) * 0.05;
+            this.shakeIntensity = 0;
+            if (this.spawnTimer > 0.03) {
+                this.spawnTimer = 0;
+                this.spawnAmbientParticles(3);
+            }
+        } else {
+            this.textAlpha = 1 - (progress - 0.85) / 0.15;
+            this.textScale = 1;
+            this.shakeIntensity = 0;
+            if (this.spawnTimer > 0.05) {
+                this.spawnTimer = 0;
+                this.spawnAmbientParticles(2);
+            }
+        }
+
+        if (progress >= 0.05 && progress < 0.06) {
+            this.spawnRingParticles();
+        }
+        if (progress >= 0.3 && progress < 0.31) {
+            this.spawnRingParticles();
+        }
+        if (progress >= 0.6 && progress < 0.61) {
+            this.spawnRingParticles();
+        }
+
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            this.particles[i].update(dt);
+            if (this.particles[i].isDead()) {
+                this.particles.splice(i, 1);
+            }
+        }
+
+        if (this.time >= this.duration && this.particles.length === 0) {
+            this.isFinished = true;
+        }
+    }
+
+    spawnBurstParticles(count) {
+        for (let i = 0; i < count; i++) {
+            const useGold = Math.random() < 0.7;
+            const color = useGold ? this.primaryColor : this.secondaryColor;
+            const type = useGold ? 'golden' : 'burst';
+            this.particles.push(new PromotionParticle(this.x, this.y, color, type));
+        }
+    }
+
+    spawnAmbientParticles(count) {
+        for (let i = 0; i < count; i++) {
+            const offsetX = (Math.random() - 0.5) * 400;
+            const offsetY = (Math.random() - 0.5) * 300;
+            const useGold = Math.random() < 0.6;
+            const color = useGold ? this.primaryColor : this.secondaryColor;
+            this.particles.push(new PromotionParticle(
+                this.x + offsetX,
+                this.y + offsetY + 200,
+                color,
+                'sparkle'
+            ));
+        }
+    }
+
+    spawnRingParticles() {
+        for (let i = 0; i < 3; i++) {
+            setTimeout(() => {
+                this.particles.push(new PromotionParticle(
+                    this.x,
+                    this.y,
+                    this.primaryColor,
+                    'ring'
+                ));
+            }, i * 50);
+        }
+    }
+
+    render(ctx) {
+        ctx.save();
+
+        if (this.shakeIntensity > 0) {
+            ctx.translate(
+                (Math.random() - 0.5) * this.shakeIntensity,
+                (Math.random() - 0.5) * this.shakeIntensity
+            );
+        }
+
+        for (const particle of this.particles) {
+            particle.render(ctx);
+        }
+
+        if (this.textAlpha > 0) {
+            ctx.save();
+            ctx.globalAlpha = this.textAlpha;
+            ctx.translate(this.x, this.y);
+            ctx.scale(this.textScale, this.textScale);
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            const glowGradient = ctx.createRadialGradient(0, 0, 10, 0, 0, 200);
+            glowGradient.addColorStop(0, this.primaryColor + '80');
+            glowGradient.addColorStop(0.5, this.primaryColor + '30');
+            glowGradient.addColorStop(1, 'transparent');
+            ctx.fillStyle = glowGradient;
+            ctx.beginPath();
+            ctx.arc(0, 0, 200, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.shadowColor = this.primaryColor;
+            ctx.shadowBlur = 40;
+
+            ctx.font = 'bold 24px "Courier New", monospace';
+            ctx.fillStyle = this.secondaryColor;
+            ctx.fillText('✦ 晋级成功 ✦', 0, -110);
+
+            ctx.font = 'bold 72px "Courier New", monospace';
+            const textGradient = ctx.createLinearGradient(-150, -40, 150, 40);
+            textGradient.addColorStop(0, this.primaryColor);
+            textGradient.addColorStop(0.5, '#FFFFFF');
+            textGradient.addColorStop(1, this.secondaryColor);
+            ctx.fillStyle = textGradient;
+            ctx.fillText(this.newRank.name || '黄金', 0, -30);
+
+            ctx.shadowBlur = 20;
+            ctx.font = 'bold 20px "Courier New", monospace';
+            ctx.fillStyle = this.primaryColor;
+            const prevName = this.prevRank ? this.prevRank.name : '青铜';
+            const newName = this.newRank ? this.newRank.name : '黄金';
+            ctx.fillText(`${prevName} → ${newName}`, 0, 35);
+
+            if (this.scoreGained > 0) {
+                ctx.font = '18px "Courier New", monospace';
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillText(`+${this.scoreGained.toLocaleString()} 分`, 0, 70);
+            }
+
+            ctx.shadowBlur = 0;
+            ctx.font = '14px "Courier New", monospace';
+            ctx.fillStyle = '#AAAAAA';
+            ctx.fillText('战机升阶完成！', 0, 105);
+
+            ctx.restore();
+        }
+
+        ctx.restore();
     }
 }
 
