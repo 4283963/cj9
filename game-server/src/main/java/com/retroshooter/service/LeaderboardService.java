@@ -7,7 +7,9 @@ import com.retroshooter.entity.LeaderboardEntry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -150,13 +152,31 @@ public class LeaderboardService {
 
     public Set<String> getGameIdsForDate(LocalDate date) {
         String pattern = gameDetailPrefix + date.toString() + ":*";
-        Set<String> keys = redisTemplate.keys(pattern);
-        if (keys == null) {
+        Set<String> keys = scanKeys(pattern);
+        if (keys.isEmpty()) {
             return Collections.emptySet();
         }
         return keys.stream()
                 .map(key -> key.substring(key.lastIndexOf(':') + 1))
                 .collect(Collectors.toSet());
+    }
+
+    private Set<String> scanKeys(String pattern) {
+        Set<String> keys = new HashSet<>();
+        ScanOptions scanOptions = ScanOptions.scanOptions()
+                .match(pattern)
+                .count(100)
+                .build();
+
+        try (Cursor<String> cursor = redisTemplate.scan(scanOptions)) {
+            while (cursor.hasNext()) {
+                keys.add(cursor.next());
+            }
+        } catch (Exception e) {
+            log.error("SCAN operation failed for pattern {}: {}", pattern, e.getMessage(), e);
+        }
+
+        return keys;
     }
 
     public void deleteGameRecords(Set<String> gameIds, LocalDate date) {

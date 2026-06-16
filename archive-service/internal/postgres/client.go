@@ -17,9 +17,10 @@ import (
 )
 
 type Client struct {
-	pool    *pgxpool.Pool
-	batchSize int
-	ctx     context.Context
+	pool          *pgxpool.Pool
+	batchSize     int
+	throttleDelay time.Duration
+	ctx           context.Context
 }
 
 type ArchivedGameRecord struct {
@@ -64,9 +65,10 @@ func NewClient(cfg *config.Config) (*Client, error) {
 	}
 
 	client := &Client{
-		pool:      pool,
-		batchSize: cfg.BatchSize,
-		ctx:       context.Background(),
+		pool:          pool,
+		batchSize:     cfg.PostgresBatchSize,
+		throttleDelay: time.Duration(cfg.RedisThrottleDelayMs) * time.Millisecond,
+		ctx:           context.Background(),
 	}
 
 	if err := client.InitSchema(); err != nil {
@@ -125,9 +127,99 @@ func (c *Client) ArchiveRecords(records []redisclient.GameRecord) (int, error) {
 		return 0, nil
 	}
 
+	totalRecords := len(records)
+	batchCount := (totalRecords + c.batchSize - 1) / c.batchSize
+
+	log.Printf("Archiving %d records in %d batches (batch size: %d)",
+		totalRecords, batchCount, c.batchSize)
+
+	totalOriginalSize := 0
+	totalCompressedSize := 0
+	totalScore := int64(0)
+	totalInserted := 0
+
+	archiveDate := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+
+	for batchIdx := 0; batchIdx < batchCount; batchIdx++ {
+		start := batchIdx * c.batchSize
+		end := start + c.batchSize
+		if end > totalRecords {
+			end = totalRecords
+		}
+
+		batchRecords := records[start:end]
+		batchInserted, batchOriginalSize, batchCompressedSize, batchScore, err := c.archiveBatch(batchRecords)
+		if err != nil {
+			return totalInserted, fmt.Errorf("batch %d failed: %w", batchIdx, err)
+		}
+
+		totalInserted += batchInserted
+		totalOriginalSize += batchOriginalSize
+		totalCompressedSize += batchCompressedSize
+		totalScore += batchScore
+
+		log.Printf("Batch %d/%d completed: inserted %d records",
+			batchIdx+1, batchCount, batchInserted)
+
+		if c.throttleDelay > 0 && batchIdx < batchCount-1 {
+			time.Sleep(c.throttleDelay)
+		}
+	}
+
+	if totalInserted > 0 {
+		avgScore := float64(totalScore) / float64(totalInserted)
+		compressionRatio := 0.0
+		if totalOriginalSize > 0 {
+			compressionRatio = float64(totalCompressedSize) / float64(totalOriginalSize)
+		}
+
+		_, err := c.pool.Exec(c.ctx, `
+			INSERT INTO archive_summary 
+			(archive_date, total_records, total_score, average_score, 
+			 compressed_total_size, original_total_size, compression_ratio)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (archive_date) DO UPDATE SET
+				total_records = archive_summary.total_records + EXCLUDED.total_records,
+				total_score = archive_summary.total_score + EXCLUDED.total_score,
+				average_score = (archive_summary.total_score + EXCLUDED.total_score)::float / 
+					(archive_summary.total_records + EXCLUDED.total_records),
+				compressed_total_size = archive_summary.compressed_total_size + EXCLUDED.compressed_total_size,
+				original_total_size = archive_summary.original_total_size + EXCLUDED.original_total_size,
+				compression_ratio = (archive_summary.compressed_total_size + EXCLUDED.compressed_total_size)::float / 
+					(archive_summary.original_total_size + EXCLUDED.original_total_size)
+		`,
+			archiveDate,
+			totalInserted,
+			totalScore,
+			avgScore,
+			int64(totalCompressedSize),
+			int64(totalOriginalSize),
+			compressionRatio,
+		)
+		if err != nil {
+			log.Printf("Warning: failed to insert archive summary: %v", err)
+		}
+	}
+
+	log.Printf("Archived %d/%d records, original size: %d bytes, compressed size: %d bytes, ratio: %.2f%%",
+		totalInserted,
+		totalRecords,
+		totalOriginalSize,
+		totalCompressedSize,
+		float64(totalCompressedSize)/float64(totalOriginalSize)*100,
+	)
+
+	return totalInserted, nil
+}
+
+func (c *Client) archiveBatch(records []redisclient.GameRecord) (int, int, int, int64, error) {
+	if len(records) == 0 {
+		return 0, 0, 0, 0, nil
+	}
+
 	tx, err := c.pool.Begin(c.ctx)
 	if err != nil {
-		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+		return 0, 0, 0, 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(c.ctx)
 
@@ -135,7 +227,6 @@ func (c *Client) ArchiveRecords(records []redisclient.GameRecord) (int, error) {
 	totalOriginalSize := 0
 	totalCompressedSize := 0
 	totalScore := int64(0)
-	insertCount := 0
 
 	for _, record := range records {
 		inputJSON, err := json.Marshal(record.InputSequence)
@@ -179,18 +270,17 @@ func (c *Client) ArchiveRecords(records []redisclient.GameRecord) (int, error) {
 			record.Verified,
 			record.Checksum,
 		)
-		insertCount++
 	}
 
 	if batch.Len() == 0 {
-		return 0, nil
+		return 0, 0, 0, 0, nil
 	}
 
 	results := tx.SendBatch(c.ctx, batch)
 	defer results.Close()
 
 	insertedCount := 0
-	for i := 0; i < insertCount; i++ {
+	for i := 0; i < batch.Len(); i++ {
 		tag, err := results.Exec()
 		if err != nil {
 			log.Printf("Warning: failed to insert record %d: %v", i, err)
@@ -201,54 +291,11 @@ func (c *Client) ArchiveRecords(records []redisclient.GameRecord) (int, error) {
 		}
 	}
 
-	if insertedCount > 0 {
-		avgScore := float64(totalScore) / float64(insertedCount)
-		compressionRatio := 0.0
-		if totalOriginalSize > 0 {
-			compressionRatio = float64(totalCompressedSize) / float64(totalOriginalSize)
-		}
-
-		archiveDate := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
-		_, err = tx.Exec(c.ctx, `
-			INSERT INTO archive_summary 
-			(archive_date, total_records, total_score, average_score, 
-			 compressed_total_size, original_total_size, compression_ratio)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
-			ON CONFLICT (archive_date) DO UPDATE SET
-				total_records = game_records_archive.total_records + EXCLUDED.total_records,
-				total_score = game_records_archive.total_score + EXCLUDED.total_score,
-				average_score = (game_records_archive.total_score + EXCLUDED.total_score)::float / 
-					(game_records_archive.total_records + EXCLUDED.total_records),
-				compressed_total_size = game_records_archive.compressed_total_size + EXCLUDED.compressed_total_size,
-				original_total_size = game_records_archive.original_total_size + EXCLUDED.original_total_size,
-				compression_ratio = (game_records_archive.compressed_total_size + EXCLUDED.compressed_total_size)::float / 
-					(game_records_archive.original_total_size + EXCLUDED.original_total_size)
-		`,
-			archiveDate,
-			insertedCount,
-			totalScore,
-			avgScore,
-			int64(totalCompressedSize),
-			int64(totalOriginalSize),
-			compressionRatio,
-		)
-		if err != nil {
-			log.Printf("Warning: failed to insert archive summary: %v", err)
-		}
-	}
-
 	if err := tx.Commit(c.ctx); err != nil {
-		return 0, fmt.Errorf("failed to commit transaction: %w", err)
+		return 0, 0, 0, 0, fmt.Errorf("failed to commit batch: %w", err)
 	}
 
-	log.Printf("Archived %d records, original size: %d bytes, compressed size: %d bytes, ratio: %.2f%%",
-		insertedCount,
-		totalOriginalSize,
-		totalCompressedSize,
-		float64(totalCompressedSize)/float64(totalOriginalSize)*100,
-	)
-
-	return insertedCount, nil
+	return insertedCount, totalOriginalSize, totalCompressedSize, totalScore, nil
 }
 
 func (c *Client) GetReplayData(gameID string) (*redisclient.GameRecord, error) {

@@ -19,10 +19,14 @@ type Config struct {
 	PostgresPassword string
 	PostgresDB       string
 
-	RedisKeyPrefix string
-	BatchSize      int
-	ArchiveCron    string
-	TimeZone       string
+	RedisKeyPrefix       string
+	BatchSize            int
+	RedisScanCount       int64
+	RedisBatchSize       int
+	RedisThrottleDelayMs int
+	PostgresBatchSize    int
+	ArchiveCron          string
+	TimeZone             string
 }
 
 func Load() *Config {
@@ -41,10 +45,14 @@ func Load() *Config {
 		PostgresPassword: getEnv("POSTGRES_PASSWORD", "retroshooter"),
 		PostgresDB:       getEnv("POSTGRES_DB", "retroshooter"),
 
-		RedisKeyPrefix: getEnv("REDIS_KEY_PREFIX", "game:detail:"),
-		BatchSize:      getEnvInt("BATCH_SIZE", 100),
-		ArchiveCron:    getEnv("ARCHIVE_CRON", "0 0 1 * * *"),
-		TimeZone:       getEnv("TIME_ZONE", "Asia/Shanghai"),
+		RedisKeyPrefix:       getEnv("REDIS_KEY_PREFIX", "game:detail:"),
+		BatchSize:            getEnvInt("BATCH_SIZE", 100),
+		RedisScanCount:       int64(getEnvInt("REDIS_SCAN_COUNT", 100)),
+		RedisBatchSize:       getEnvInt("REDIS_BATCH_SIZE", 50),
+		RedisThrottleDelayMs: getEnvInt("REDIS_THROTTLE_MS", 10),
+		PostgresBatchSize:    getEnvInt("POSTGRES_BATCH_SIZE", 100),
+		ArchiveCron:          getEnv("ARCHIVE_CRON", "0 0 1 * * *"),
+		TimeZone:             getEnv("TIME_ZONE", "Asia/Shanghai"),
 	}
 }
 

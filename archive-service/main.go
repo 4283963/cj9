@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"archive-service/config"
 	postgresclient "archive-service/internal/postgres"
@@ -35,7 +36,11 @@ func main() {
 	log.Printf("Redis: %s:%s", cfg.RedisHost, cfg.RedisPort)
 	log.Printf("PostgreSQL: %s:%s/%s", cfg.PostgresHost, cfg.PostgresPort, cfg.PostgresDB)
 
-	redisClient := redisclient.NewClient(cfg)
+	redisClient := redisclient.NewClient(cfg,
+		redisclient.WithScanCount(cfg.RedisScanCount),
+		redisclient.WithBatchSize(cfg.RedisBatchSize),
+		redisclient.WithThrottleDelay(time.Duration(cfg.RedisThrottleDelayMs)*time.Millisecond),
+	)
 	defer redisClient.Close()
 
 	if err := redisClient.Ping(); err != nil {
